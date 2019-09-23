@@ -1,0 +1,156 @@
+---
+title: "DATA 607 Project 1: Chess Tournament Results"
+author: "Fan Xu, Sin Ying Wong"
+date: "9/21/2019"
+fontsize: 9pt
+output:
+  pdf_document:
+        extra_dependencies: ["geometry", "multicol", "multirow"]
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_collapsed: yes
+    toc_float: yes
+theme: lumen
+number_sections: yes
+toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Project Description
+In this project, you’re given a text file with chess tournament results where the information has some structure. Your
+job is to create an R Markdown file that generates a .CSV file (that could for example be imported into a SQL database)
+with the following information for all of the players:
+
+Player’s Name, Player’s State, Total Number of Points, Player’s Pre-Rating, and Average Pre Chess Rating of Opponents
+For the first player, the information would be:
+
+Gary Hua, ON, 6.0, 1794, 1605
+
+1605 was calculated by using the pre-tournament opponents’ ratings of 1436, 1563, 1600, 1610, 1649, 1663, 1716, and
+dividing by the total number of games played.
+
+If you have questions about the meaning of the data or the results, please post them on the discussion forum. Data
+science, like chess, is a game of back and forth…
+
+The chess rating system (invented by a Minnesota statistician named Arpad Elo) has been used in many other contexts,
+including assessing relative strength of employment candidates by human resource departments.
+
+You may substitute another text file (or set of text files, or data scraped from web pages) of similar or greater
+complexity, and create your own assignment and solution. You may work in a small team. All of your code should be in
+an R markdown file (and published to rpubs.com); with your data accessible for the person running the script.
+
+# 2. Project Raw Data
+The raw data is a text file with unstructured data strings.
+```{r Project Row Data}
+raw_data <- readLines('https://raw.githubusercontent.com/oggyluky11/DATA607-Project-1/master/tournamentinfo.txt')
+head(raw_data)
+```
+
+
+# 3. Raw Data Manipulation
+## a. Restructure raw data into dataframe
+In raw data, double lines of strings are used to store one 'row' of data. Data columns are seperated by "|". Let's see what this raw data should look like in a real data frame. This step is not requested in this project but it is good to represent the raw data into the way it should look like as data preparation.
+```{r Restructure raw data into dataframe}
+library(dplyr)
+library(tidyr)
+library(stringr)
+#remove the last character "|"
+raw_data <- str_trim(raw_data[str_detect(raw_data,'------')==FALSE],'right')
+raw_data <- substr(raw_data, 1 ,nchar(raw_data)-1)
+
+#Combine two lines of data into one row
+raw_data2 <- character()
+for (i in (1:length(raw_data))) {
+  if(i%%2==0) {
+    line_odd <- str_trim(unlist(str_split(raw_data[i-1], '\\|')))
+    line_even <- str_trim(unlist(str_split(raw_data[i], '\\|')))
+    line_cat <- str_c(line_odd,line_even,sep = ' ', collapse = ',')
+    raw_data2 <- append(raw_data2,line_cat)
+  }
+}
+raw_data2 <-data.frame(raw_data2)
+raw_data_frame <- raw_data2 %>% separate(raw_data2, as.character(c(1:10)), sep = ',', extra = 'drop')
+
+#Set first row as header and rename columns
+names(raw_data_frame)<- unlist(raw_data_frame[1,])
+raw_data_frame <- raw_data_frame[-1,]
+raw_data_frame
+```
+
+## b. Get data elements
+```{r Get data elements}
+data_elements <-data.frame(str_extract(raw_data_frame$`Pair Num`,'\\d+'), #Player's ID
+  str_trim(str_extract(raw_data_frame$`Player Name USCF ID / Rtg (Pre->Post)`,'[A-Z ]+\\b')), #Player's Name
+  str_extract(raw_data_frame$`Pair Num`,'[A-Z]+'), #Player's State
+  str_extract(raw_data_frame$`Total Pts`,'[0-9.]+'), #Player's Total Points
+  str_replace(raw_data_frame$`Player Name USCF ID / Rtg (Pre->Post)`, '[A-z0-9 [:PUNCT:]]+\\/ R\\: *([0-9]+)([A-Z0-9]+)? *.+', '\\1'), #player's Rating
+  lapply(raw_data_frame[,4:10], function(x) str_extract(x, '\\d+'))) #IDs of components
+
+#Rename columns
+names(data_elements) <- c('ID','Player’s Name','Player’s State','Total Number of Points','Player’s Pre-Rating','Round 1','Round 2','Round 3','Round 4','Round 5','Round 6','Round 7')
+
+#change data type of 'Player’s Pre-Rating' to be numberic 
+data_elements$'Player’s Pre-Rating' <- as.numeric(as.character(data_elements$'Player’s Pre-Rating'))
+
+#get ratings of all components for each player
+data_elements[,6:12] <- data_elements$'Player’s Pre-Rating'[match(unlist(data_elements[,6:12]),data_elements$ID)]
+
+#compute average ratings of components for each player
+data_elements$'Average Pre Chess Rating of Opponents' <- round(rowMeans(data_elements[,6:12],na.rm = TRUE),0)
+data_elements
+```
+
+# 3. Present final data
+```{r Present final data}
+final_data <- subset(data_elements[,c(2:5,13)])
+final_data
+```
+
+# 4. Save Final Data as CSV
+```{r Save Final Data}
+write.csv(final_data, 'Final_data.csv', row.names = FALSE)
+
+# Let's check the csv output, looks good:)
+read.csv('Final_data.csv')
+```
+
+# 5. Extra Data Analysis
+It is fun and challenge in a chess tournament where players are paried according to a certain rating algorithm which matches players with compatible components, which means if a player has high winning rate, he/she will be more likely to paired with a strong component in the next run. Let's see if this is the case in this data set.
+```{r Extra Data Analysis}
+library(reshape2)
+# extract a new subset of data which records results of each round, then compute the wining-rate of each player. 
+data <- data.frame(lapply(raw_data_frame[,c(2,4:10)], function(x) str_trim(str_extract(str_trim(x),'^[A-z ]{2,}'))),stringsAsFactors = FALSE)
+
+# For a more accurate winning-rate, in this data set only players who completed all 7 rounds of game are selected.
+data <-na.omit(data)
+names(data)<-c('Name', str_c('Round_', c(1:7)))
+data
+
+# Reshape the data and compute winning-rate
+data_melt <- melt(data, variable.name = 'Round', value.name = 'Result', id.vars = c('Name'))
+data_cast <- dcast(data_melt, Name~Result, fun.aggregate = length)
+data_cast$Win_Rtg <-data_cast$W/7
+
+# Join the final_data set in previous section
+data_join <-merge(data_cast,final_data,by.x=c('Name'),by.y=c('Player’s Name'))
+data_join$Rtg_Diff <- data_join[,9]-data_join[,8]
+data_join$Win_Seg <-ifelse(data_join$Win_Rtg>=0.5, 'Winning_Rate >= 50%', 'Winning_Rate < 50%')
+data_join
+```
+
+A player who has high wining rate always has high rating. This can be shown in the boxplot below.
+```{r boxplot1}
+boxplot(data_join$"Player’s Pre-Rating"~Win_Seg, data=data_join, main="Player's Pre-Rating", 
+        sub="Segmented by Player's Winning-Rate", ylab = 'Pre-Rating')
+```
+
+The second boxplot below shows that players with low winning rates have wider range of components in terms of the rating of components, while players with high wining rates are more likely to be paired components with equal or close ratings. combine with the observation in the first boxplot above, players with high wining rates always have higher ratings, we can see that the more games the player win, the higher his/her rating is, and the more likely he/she will pair with components of similar high level.
+```{r boxplot2}
+boxplot(Rtg_Diff~Win_Seg, data=data_join,
+        main="Difference between Average Rating of Components and Player's Rating",
+        sub="Segmented by Player's Winning-Rate", ylab = 'Rating-Difference')
+```
